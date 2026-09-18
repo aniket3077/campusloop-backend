@@ -7,6 +7,8 @@ const router = Router();
 router.use(authenticateToken);
 
 router.get('/', impactController.getImpact);
+router.get('/summary', impactController.getImpactSummary);
+router.get('/departments', impactController.getImpactByDepartment);
 router.get('/user', impactController.getUserImpact);
 
 export default router;

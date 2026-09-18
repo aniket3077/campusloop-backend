@@ -111,7 +111,8 @@ export const reportController = {
       }
 
       const { id } = req.params;
-      const { status, notes, priority } = req.body;
+      const { status, notes, resolutionNote, priority } = req.body;
+      const actualNotes = notes ?? resolutionNote;
 
       if (!['OPEN', 'UNDER_REVIEW', 'RESOLVED', 'REJECTED'].includes(status)) {
         res.status(400).json({ error: 'Invalid report status' });
@@ -127,7 +128,7 @@ export const reportController = {
       }
 
       const updateData: any = { status };
-      if (notes !== undefined) updateData.notes = notes;
+      if (actualNotes !== undefined) updateData.notes = actualNotes;
       if (priority) updateData.priority = priority;
 
       if (status === 'RESOLVED' || status === 'REJECTED') {

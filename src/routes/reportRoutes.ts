@@ -13,5 +13,6 @@ router.post('/', reportController.createReport);
 // Admins can list and update reports
 router.get('/', requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN']), reportController.getReports);
 router.patch('/:id/status', requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN']), reportController.updateReportStatus);
+router.patch('/:id/resolve', requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN']), reportController.updateReportStatus);
 
 export default router;

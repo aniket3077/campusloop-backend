@@ -71,11 +71,13 @@ export const transactionController = {
 
       const where: any = {};
 
+      const andConditions: any[] = [];
+
       // Role scoping
       if (req.user?.role === 'COLLEGE_ADMIN') {
         where.collegeId = req.user.collegeId;
       } else if (req.user?.role === 'STUDENT') {
-        where.OR = [{ buyerId: req.user.id }, { sellerId: req.user.id }];
+        andConditions.push({ OR: [{ buyerId: req.user.id }, { sellerId: req.user.id }] });
       } else if (queryCollegeId && queryCollegeId !== 'ALL') {
         where.collegeId = queryCollegeId;
       }
@@ -88,13 +90,20 @@ export const transactionController = {
         where.transactionType = type;
       }
 
-      if (search && typeof search === 'string') {
-        where.OR = [
-          { id: { contains: search, mode: 'insensitive' } },
-          { item: { title: { contains: search, mode: 'insensitive' } } },
-          { buyer: { name: { contains: search, mode: 'insensitive' } } },
-          { seller: { name: { contains: search, mode: 'insensitive' } } },
-        ];
+      if (search && typeof search === 'string' && search.trim()) {
+        const term = search.trim();
+        andConditions.push({
+          OR: [
+            { id: { contains: term, mode: 'insensitive' } },
+            { item: { title: { contains: term, mode: 'insensitive' } } },
+            { buyer: { name: { contains: term, mode: 'insensitive' } } },
+            { seller: { name: { contains: term, mode: 'insensitive' } } },
+          ],
+        });
+      }
+
+      if (andConditions.length > 0) {
+        where.AND = andConditions;
       }
 
       const transactions = await prisma.transaction.findMany({

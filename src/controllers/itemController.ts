@@ -295,7 +295,71 @@ export const itemController = {
         data: { listingCount: { increment: 1 } },
       });
 
-      res.status(201).json(item);
+      // Fetch fully populated item with images and seller info
+      const completeItem = await prisma.item.findUnique({
+        where: { id: item.id },
+        include: {
+          seller: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              trustRating: true,
+              verificationStatus: true,
+              totalTransactions: true,
+            },
+          },
+          college: { select: { id: true, name: true, code: true } },
+          images: { orderBy: { order: 'asc' } },
+          pickupLocation: true,
+        },
+      });
+
+      if (!completeItem) {
+        res.status(201).json(item);
+        return;
+      }
+
+      const imageUrls = completeItem.images.map((img) => img.url);
+
+      res.status(201).json({
+        id: completeItem.id,
+        title: completeItem.title,
+        description: completeItem.description,
+        category: completeItem.category,
+        condition: completeItem.condition,
+        price: completeItem.price,
+        type: completeItem.transactionType,
+        transactionType: completeItem.transactionType,
+        resourceType: completeItem.transactionType,
+        sellerId: completeItem.sellerId,
+        ownerId: completeItem.sellerId,
+        studentId: completeItem.sellerId,
+        sellerName: completeItem.seller.name,
+        ownerName: completeItem.seller.name,
+        studentName: completeItem.seller.name,
+        sellerRating: completeItem.seller.trustRating,
+        isVerifiedSeller: completeItem.seller.verificationStatus === 'VERIFIED',
+        collegeId: completeItem.collegeId,
+        collegeName: completeItem.college.name,
+        university: completeItem.college.name,
+        status: completeItem.status,
+        isAvailable: completeItem.isAvailable,
+        isRecommended: completeItem.isRecommended,
+        isNearby: completeItem.isNearby,
+        isDigital: completeItem.isDigital,
+        digitalProvider: completeItem.digitalProvider,
+        exchangePreferences: completeItem.exchangePreferences,
+        maxBorrowDays: completeItem.maxBorrowDays,
+        courseCode: completeItem.courseCode,
+        depositAmount: 0,
+        pickupLocation: completeItem.pickupLocation?.name || completeItem.pickupLocationName || 'Campus Main Hub',
+        pickupLocationId: completeItem.pickupLocationId,
+        imageUrls: imageUrls.length > 0 ? imageUrls : ['https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c'],
+        images: imageUrls,
+        createdAt: completeItem.createdAt.toISOString(),
+        updatedAt: completeItem.updatedAt.toISOString(),
+      });
     } catch (error) {
       console.error('Create item error:', error);
       res.status(500).json({ error: 'Failed to create listing' });

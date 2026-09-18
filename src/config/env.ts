@@ -10,5 +10,5 @@ export const ENV = {
   CORS_ORIGIN: process.env.CORS_ORIGIN || '*',
   GCP_API_KEY: process.env.GCP_API_KEY || '',
   GCP_PROJECT_ID: process.env.GCP_PROJECT_ID || 'garbage-fa1b3',
-  CLOUD_RUN_URL: process.env.CLOUD_RUN_URL || 'https://campusloopbackend-853669501284.europe-west1.run.app',
+  CLOUD_RUN_URL: process.env.CLOUD_RUN_URL || 'https://campusloop-backend-1035058975798.europe-west1.run.app',
 };

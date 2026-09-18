@@ -52,31 +52,42 @@ export const studentController = {
         },
       });
 
-      const formatted = students.map((s) => ({
-        id: s.id,
-        fullName: s.name,
-        name: s.name,
-        email: s.email,
-        collegeId: s.collegeId,
-        collegeName: s.college?.name || 'Unassigned',
-        collegeCode: s.college?.code,
-        department: s.department || 'General',
-        academicYear: s.academicYear || '1st Year',
-        rollNumber: s.rollNumber || 'N/A',
-        status: s.status,
-        verificationStatus: s.verificationStatus,
-        verificationNote: s.verificationNote,
-        trustScore: Math.round(s.trustRating * 20), // 0-100 scale for admin UI
-        trustRating: s.trustRating,
-        activeListingsCount: s._count.ownedItems,
-        totalTransactionsCount: s._count.buyerTransactions + s._count.sellerTransactions,
-        strikes: s.strikes,
-        co2SavedKg: s.co2SavedKg,
-        moneySavedUsd: s.moneySavedUsd,
-        itemsCirculated: s.itemsCirculated,
-        joinedAt: s.createdAt.toISOString(),
-        createdAt: s.createdAt.toISOString(),
-      }));
+      const formatted = students.map((s) => {
+        const displayStatus = s.status === 'SUSPENDED'
+          ? 'SUSPENDED'
+          : (s.verificationStatus === 'VERIFIED' ? 'VERIFIED' : s.verificationStatus);
+
+        return {
+          id: s.id,
+          fullName: s.name,
+          name: s.name,
+          email: s.email,
+          collegeId: s.collegeId,
+          collegeName: s.college?.name || 'Unassigned',
+          collegeCode: s.college?.code,
+          department: s.department || 'General',
+          academicYear: s.academicYear || '1st Year',
+          graduationYear: s.academicYear ? parseInt(s.academicYear) || new Date().getFullYear() + 2 : new Date().getFullYear() + 2,
+          rollNumber: s.rollNumber || 'N/A',
+          status: displayStatus,
+          verificationStatus: s.verificationStatus,
+          verificationNote: s.verificationNote,
+          idCardUrl: s.avatarUrl || (s.verificationNote?.startsWith('http') ? s.verificationNote : undefined),
+          avatarUrl: s.avatarUrl,
+          trustScore: Math.round(s.trustRating * 20), // 0-100 scale for admin UI
+          trustRating: s.trustRating,
+          activeListingsCount: s._count.ownedItems,
+          totalTransactionsCount: s._count.buyerTransactions + s._count.sellerTransactions,
+          itemsShared: s.itemsCirculated || s._count.ownedItems,
+          itemsBorrowed: s._count.buyerTransactions,
+          strikes: s.strikes,
+          co2SavedKg: s.co2SavedKg,
+          moneySavedUsd: s.moneySavedUsd,
+          itemsCirculated: s.itemsCirculated,
+          joinedAt: s.createdAt.toISOString(),
+          createdAt: s.createdAt.toISOString(),
+        };
+      });
 
       res.json(formatted);
     } catch (error) {
@@ -119,6 +130,10 @@ export const studentController = {
         return;
       }
 
+      const displayStatus = student.status === 'SUSPENDED'
+        ? 'SUSPENDED'
+        : (student.verificationStatus === 'VERIFIED' ? 'VERIFIED' : student.verificationStatus);
+
       res.json({
         id: student.id,
         fullName: student.name,
@@ -128,12 +143,17 @@ export const studentController = {
         collegeName: student.college?.name,
         department: student.department,
         academicYear: student.academicYear,
+        graduationYear: student.academicYear ? parseInt(student.academicYear) || new Date().getFullYear() + 2 : new Date().getFullYear() + 2,
         rollNumber: student.rollNumber,
-        status: student.status,
+        status: displayStatus,
         verificationStatus: student.verificationStatus,
         verificationNote: student.verificationNote,
+        idCardUrl: student.avatarUrl || (student.verificationNote?.startsWith('http') ? student.verificationNote : undefined),
+        avatarUrl: student.avatarUrl,
         trustScore: Math.round(student.trustRating * 20),
         trustRating: student.trustRating,
+        itemsShared: student.itemsCirculated || student._count.ownedItems,
+        itemsBorrowed: student._count.buyerTransactions,
         totalTransactions: student._count.buyerTransactions + student._count.sellerTransactions,
         strikes: student.strikes,
         co2SavedKg: student.co2SavedKg,
@@ -201,10 +221,11 @@ export const studentController = {
   async updateAccountStatus(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { status } = req.body;
+      const { status, note } = req.body;
 
-      if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
-        res.status(400).json({ error: 'Invalid account status' });
+      const validStatuses = ['ACTIVE', 'SUSPENDED', 'VERIFIED', 'REJECTED', 'PENDING', 'ID_PENDING', 'UNVERIFIED'];
+      if (!validStatuses.includes(status)) {
+        res.status(400).json({ error: 'Invalid account or verification status' });
         return;
       }
 
@@ -216,9 +237,21 @@ export const studentController = {
         }
       }
 
+      const updateData: any = {};
+      if (['ACTIVE', 'SUSPENDED'].includes(status)) {
+        updateData.status = status;
+      } else {
+        updateData.verificationStatus = status;
+        if (status === 'VERIFIED') {
+          updateData.status = 'ACTIVE';
+          updateData.verifiedAt = new Date();
+        }
+        if (note) updateData.verificationNote = note;
+      }
+
       const updated = await prisma.user.update({
         where: { id },
-        data: { status },
+        data: updateData,
       });
 
       if (req.user) {

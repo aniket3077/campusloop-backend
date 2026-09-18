@@ -314,7 +314,8 @@ export const conversationController = {
         });
 
         // Insert initial system/inquiry message
-        const welcomeText = initialMessage && initialMessage.trim().isNotEmpty
+        const hasInitialMessage = typeof initialMessage === 'string' && initialMessage.trim().length > 0;
+        const welcomeText = hasInitialMessage
           ? initialMessage.trim()
           : (validItem ? `Hi ${resolvedSeller.name}! I saw your listing "${validItem.title}". Is it still available on campus?` : 'Started a conversation.');
 
