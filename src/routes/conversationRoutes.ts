@@ -10,5 +10,9 @@ router.get('/', conversationController.getConversations);
 router.post('/', conversationController.createOrGetConversation);
 router.get('/:id/messages', conversationController.getMessages);
 router.post('/:id/messages', conversationController.sendMessage);
+router.patch('/:id/read', conversationController.markAsRead);
+router.post('/:id/read', conversationController.markAsRead);
+router.post('/:id/typing', conversationController.setTyping);
+router.get('/:id/stream', conversationController.streamConversation);
 
 export default router;

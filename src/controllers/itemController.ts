@@ -382,17 +382,134 @@ export const itemController = {
       }
 
       // Only seller or Admin can update
-      if (item.sellerId !== req.user.id && req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'COLLEGE_ADMIN') {
+      const isSeller = item.sellerId === req.user.id;
+      const isAdmin = req.user.role === 'SUPER_ADMIN' || (req.user.role === 'COLLEGE_ADMIN' && item.collegeId === req.user.collegeId);
+
+      if (!isSeller && !isAdmin) {
         res.status(403).json({ error: 'Forbidden: You do not own this listing' });
         return;
       }
 
-      const updated = await prisma.item.update({
+      const {
+        title,
+        description,
+        category,
+        condition,
+        price,
+        transactionType,
+        exchangePreferences,
+        maxBorrowDays,
+        courseCode,
+        isDigital,
+        digitalProvider,
+        pickupLocationId,
+        pickupLocationName,
+        images,
+        isAvailable,
+        status,
+      } = req.body;
+
+      const updateData: any = {};
+      if (title !== undefined) updateData.title = title;
+      if (description !== undefined) updateData.description = description;
+      if (category !== undefined) updateData.category = category;
+      if (condition !== undefined) updateData.condition = condition;
+      if (price !== undefined) updateData.price = parseFloat(price) || 0.0;
+      if (transactionType !== undefined) updateData.transactionType = transactionType;
+      if (exchangePreferences !== undefined) updateData.exchangePreferences = exchangePreferences;
+      if (maxBorrowDays !== undefined) updateData.maxBorrowDays = maxBorrowDays ? parseInt(maxBorrowDays) : null;
+      if (courseCode !== undefined) updateData.courseCode = courseCode ? courseCode.toUpperCase() : null;
+      if (isDigital !== undefined) updateData.isDigital = Boolean(isDigital);
+      if (digitalProvider !== undefined) updateData.digitalProvider = digitalProvider;
+      if (pickupLocationId !== undefined) updateData.pickupLocationId = pickupLocationId;
+      if (pickupLocationName !== undefined) updateData.pickupLocationName = pickupLocationName;
+      if (isAvailable !== undefined) updateData.isAvailable = Boolean(isAvailable);
+      if (status !== undefined) updateData.status = status;
+
+      await prisma.item.update({
         where: { id },
-        data: req.body,
+        data: updateData,
       });
 
-      res.json(updated);
+      // Update images if provided
+      if (Array.isArray(images)) {
+        await prisma.itemImage.deleteMany({ where: { itemId: id } });
+        for (let i = 0; i < images.length; i++) {
+          await prisma.itemImage.create({
+            data: {
+              itemId: id,
+              url: images[i],
+              order: i,
+            },
+          });
+        }
+      }
+
+      // Fetch complete updated item
+      const completeItem = await prisma.item.findUnique({
+        where: { id },
+        include: {
+          seller: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              trustRating: true,
+              verificationStatus: true,
+              totalTransactions: true,
+            },
+          },
+          college: { select: { id: true, name: true, code: true } },
+          images: { orderBy: { order: 'asc' } },
+          pickupLocation: true,
+        },
+      });
+
+      if (!completeItem) {
+        res.json({ id });
+        return;
+      }
+
+      const imageUrls = completeItem.images.map((img) => img.url);
+
+      res.json({
+        id: completeItem.id,
+        title: completeItem.title,
+        description: completeItem.description,
+        category: completeItem.category,
+        condition: completeItem.condition,
+        price: completeItem.price,
+        type: completeItem.transactionType,
+        transactionType: completeItem.transactionType,
+        resourceType: completeItem.transactionType,
+        sellerId: completeItem.sellerId,
+        ownerId: completeItem.sellerId,
+        studentId: completeItem.sellerId,
+        sellerName: completeItem.seller.name,
+        ownerName: completeItem.seller.name,
+        studentName: completeItem.seller.name,
+        sellerRating: completeItem.seller.trustRating,
+        isVerifiedSeller: completeItem.seller.verificationStatus === 'VERIFIED',
+        collegeId: completeItem.collegeId,
+        collegeName: completeItem.college.name,
+        university: completeItem.college.name,
+        status: completeItem.status,
+        isAvailable: completeItem.isAvailable,
+        isRecommended: completeItem.isRecommended,
+        isNearby: completeItem.isNearby,
+        isDigital: completeItem.isDigital,
+        digitalProvider: completeItem.digitalProvider,
+        exchangePreferences: completeItem.exchangePreferences,
+        maxBorrowDays: completeItem.maxBorrowDays,
+        courseCode: completeItem.courseCode,
+        depositAmount: 0,
+        pickupLocation: completeItem.pickupLocation?.name || completeItem.pickupLocationName || 'Campus Main Hub',
+        pickupLocationId: completeItem.pickupLocationId,
+        imageUrls: imageUrls.length > 0 ? imageUrls : ['https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c'],
+        images: imageUrls,
+        createdAt: completeItem.createdAt.toISOString(),
+        updatedAt: completeItem.updatedAt.toISOString(),
+      });
     } catch (error) {
       console.error('Update item error:', error);
       res.status(500).json({ error: 'Failed to update item' });
@@ -442,12 +559,56 @@ export const itemController = {
 
   async deleteItem(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      if (!req.user) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
       const { id } = req.params;
-      // Soft deletion preferred
-      await itemController.moderateItem(
-        Object.assign(req, { body: { status: 'REMOVED' } }),
-        res
-      );
+      const item = await prisma.item.findUnique({ where: { id } });
+
+      if (!item) {
+        res.status(404).json({ error: 'Item not found' });
+        return;
+      }
+
+      // Allow if owner student or Admin
+      const isSeller = item.sellerId === req.user.id;
+      const isAdmin = req.user.role === 'SUPER_ADMIN' || (req.user.role === 'COLLEGE_ADMIN' && item.collegeId === req.user.collegeId);
+
+      if (!isSeller && !isAdmin) {
+        res.status(403).json({ error: 'Forbidden: You do not own this listing' });
+        return;
+      }
+
+      // Soft deletion: set status = 'REMOVED', isAvailable = false
+      const updated = await prisma.item.update({
+        where: { id },
+        data: {
+          status: 'REMOVED',
+          isAvailable: false,
+        },
+      });
+
+      // Decrement college listing count safely
+      if (item.collegeId) {
+        await prisma.college.update({
+          where: { id: item.collegeId },
+          data: { listingCount: { decrement: 1 } },
+        }).catch(() => {});
+      }
+
+      if (isAdmin) {
+        await recordAuditLog({
+          admin: req.user,
+          action: 'LISTING_REMOVED',
+          entityType: 'Item',
+          entityId: id,
+          metadata: { newStatus: 'REMOVED', title: item.title },
+        }).catch(() => {});
+      }
+
+      res.json({ success: true, message: 'Listing deleted successfully', item: updated });
     } catch (error) {
       console.error('Delete item error:', error);
       res.status(500).json({ error: 'Failed to delete listing' });

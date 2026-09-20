@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.js';
 import prisma from '../config/db.js';
+import { realtimeChatService } from '../services/realtimeChatService.js';
 
 export const conversationController = {
   async getConversations(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -401,9 +402,40 @@ export const conversationController = {
           offerStatus: meta?.status || (m.type === 'OFFER' ? 'PENDING' : null),
           metadata: m.metadata,
           isMe: m.senderId === req.user?.id,
+          isRead: meta?.isRead === true,
+          readAt: meta?.readAt || null,
           timestamp: m.createdAt.toISOString(),
         };
       });
+
+      // Auto-mark unread peer messages as read when recipient loads conversation
+      if (req.user) {
+        const unreadPeerMsgs = messages.filter(
+          (m) => m.senderId !== req.user?.id && !(m.metadata as any)?.isRead
+        );
+
+        if (unreadPeerMsgs.length > 0) {
+          const readAt = new Date().toISOString();
+          Promise.all(
+            unreadPeerMsgs.map((m) => {
+              const meta = (m.metadata as any) || {};
+              return prisma.message.update({
+                where: { id: m.id },
+                data: { metadata: { ...meta, isRead: true, readAt } },
+              });
+            })
+          )
+            .then(() => {
+              realtimeChatService.broadcast(
+                id,
+                'message:read',
+                { conversationId: id, readBy: req.user!.id, readAt, count: unreadPeerMsgs.length },
+                req.user!.id
+              );
+            })
+            .catch((e) => console.error('Auto-mark read error:', e));
+        }
+      }
 
       res.json(formatted);
     } catch (error) {
@@ -477,6 +509,10 @@ export const conversationController = {
       }
 
       const messageType = type || (metadata?.priceOffer ? 'OFFER' : 'TEXT');
+      const messageMetadata = {
+        ...(typeof metadata === 'object' && metadata !== null ? metadata : {}),
+        isRead: false,
+      };
 
       const message = await prisma.message.create({
         data: {
@@ -484,7 +520,7 @@ export const conversationController = {
           senderId: req.user.id,
           text: text.trim(),
           type: messageType,
-          metadata: metadata || undefined,
+          metadata: messageMetadata,
         },
         include: { sender: { select: { id: true, name: true } } },
       });
@@ -496,7 +532,7 @@ export const conversationController = {
       });
 
       const meta = message.metadata as any;
-      res.status(201).json({
+      const formattedMessage = {
         id: message.id,
         conversationId: conversation.id,
         senderId: message.senderId,
@@ -507,12 +543,163 @@ export const conversationController = {
         isOffer: message.type === 'OFFER' || !!meta?.priceOffer || !!meta?.offeredPrice,
         offerStatus: meta?.status || (message.type === 'OFFER' ? 'PENDING' : null),
         metadata: message.metadata,
-        isMe: true,
+        isMe: false,
+        isRead: false,
         timestamp: message.createdAt.toISOString(),
+      };
+
+      // 0ms Real-Time Push to active listeners (WhatsApp style)
+      realtimeChatService.broadcast(
+        conversation.id,
+        'message:new',
+        formattedMessage,
+        req.user.id
+      );
+
+      res.status(201).json({
+        ...formattedMessage,
+        isMe: true,
       });
     } catch (error) {
       console.error('Send message error:', error);
       res.status(500).json({ error: 'Failed to send message' });
+    }
+  },
+
+  async markAsRead(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const { id } = req.params;
+
+      const conversation = await prisma.conversation.findUnique({
+        where: { id },
+        select: { id: true, participantAId: true, participantBId: true },
+      });
+
+      if (!conversation) {
+        res.status(404).json({ error: 'Conversation not found' });
+        return;
+      }
+
+      const readAt = new Date().toISOString();
+
+      // Find all unread messages sent by peer
+      const unreadMessages = await prisma.message.findMany({
+        where: {
+          conversationId: id,
+          senderId: { not: req.user.id },
+        },
+        select: { id: true, metadata: true },
+      });
+
+      let updatedCount = 0;
+      for (const msg of unreadMessages) {
+        const meta = (msg.metadata as any) || {};
+        if (!meta.isRead) {
+          await prisma.message.update({
+            where: { id: msg.id },
+            data: {
+              metadata: {
+                ...meta,
+                isRead: true,
+                readAt,
+              },
+            },
+          });
+          updatedCount++;
+        }
+      }
+
+      // Broadcast read receipt in 0ms (WhatsApp double cyan ticks)
+      realtimeChatService.broadcast(
+        id,
+        'message:read',
+        {
+          conversationId: id,
+          readBy: req.user.id,
+          readAt,
+          updatedCount,
+        },
+        req.user.id
+      );
+
+      res.json({ success: true, updatedCount, readAt });
+    } catch (error) {
+      console.error('Mark as read error:', error);
+      res.status(500).json({ error: 'Failed to mark messages as read' });
+    }
+  },
+
+  async setTyping(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const { id } = req.params;
+      const { isTyping } = req.body;
+
+      realtimeChatService.broadcast(
+        id,
+        'typing:status',
+        {
+          conversationId: id,
+          userId: req.user.id,
+          userName: req.user.name,
+          isTyping: !!isTyping,
+        },
+        req.user.id
+      );
+
+      res.json({ success: true, isTyping: !!isTyping });
+    } catch (error) {
+      console.error('Set typing error:', error);
+      res.status(500).json({ error: 'Failed to update typing status' });
+    }
+  },
+
+  async streamConversation(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const { id } = req.params;
+
+      const conversation = await prisma.conversation.findUnique({
+        where: { id },
+        select: { id: true, participantAId: true, participantBId: true },
+      });
+
+      if (!conversation) {
+        res.status(404).json({ error: 'Conversation not found' });
+        return;
+      }
+
+      if (conversation.participantAId !== req.user.id && conversation.participantBId !== req.user.id) {
+        res.status(403).json({ error: 'Forbidden: Not a participant in this conversation' });
+        return;
+      }
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'X-Accel-Buffering': 'no',
+      });
+      res.flushHeaders?.();
+
+      realtimeChatService.addClient(id, req.user.id, res);
+    } catch (error) {
+      console.error('Stream conversation error:', error);
+      res.status(500).end();
     }
   },
 };
