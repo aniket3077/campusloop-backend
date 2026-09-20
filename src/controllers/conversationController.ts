@@ -3,6 +3,48 @@ import { AuthenticatedRequest } from '../middleware/auth.js';
 import prisma from '../config/db.js';
 import { realtimeChatService } from '../services/realtimeChatService.js';
 
+async function resolveConversationRecord(
+  id: string,
+  userId?: string,
+  itemId?: string | null
+): Promise<{ id: string; participantAId: string; participantBId: string; itemId: string | null } | null> {
+  // 1. Direct UUID lookup
+  let conversation = await prisma.conversation.findUnique({
+    where: { id },
+    select: { id: true, participantAId: true, participantBId: true, itemId: true },
+  });
+  if (conversation) return conversation;
+
+  // 2. Client temporary ID format: conv_<itemId>_<timestamp>
+  let targetItemId = itemId || null;
+  if (!targetItemId && id.startsWith('conv_')) {
+    const parts = id.split('_');
+    if (parts.length >= 2) {
+      targetItemId = parts[1];
+    }
+  }
+
+  if (targetItemId) {
+    if (userId) {
+      conversation = await prisma.conversation.findFirst({
+        where: {
+          itemId: targetItemId,
+          OR: [{ participantAId: userId }, { participantBId: userId }],
+        },
+        select: { id: true, participantAId: true, participantBId: true, itemId: true },
+      });
+    } else {
+      conversation = await prisma.conversation.findFirst({
+        where: { itemId: targetItemId },
+        select: { id: true, participantAId: true, participantBId: true, itemId: true },
+      });
+    }
+    if (conversation) return conversation;
+  }
+
+  return null;
+}
+
 export const conversationController = {
   async getConversations(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -370,10 +412,8 @@ export const conversationController = {
     try {
       const { id } = req.params;
 
-      // Handle if conversation does not exist or client ID passed
-      const conversation = await prisma.conversation.findUnique({
-        where: { id },
-      });
+      // Handle if conversation does not exist or client ID passed (conv_<itemId>_<timestamp>)
+      const conversation = await resolveConversationRecord(id, req.user?.id);
 
       if (!conversation) {
         res.json([]);
@@ -381,7 +421,7 @@ export const conversationController = {
       }
 
       const messages = await prisma.message.findMany({
-        where: { conversationId: id },
+        where: { conversationId: conversation.id },
         orderBy: { createdAt: 'asc' },
         include: {
           sender: { select: { id: true, name: true } },
@@ -427,11 +467,19 @@ export const conversationController = {
           )
             .then(() => {
               realtimeChatService.broadcast(
-                id,
+                conversation.id,
                 'message:read',
-                { conversationId: id, readBy: req.user!.id, readAt, count: unreadPeerMsgs.length },
+                { conversationId: conversation.id, readBy: req.user!.id, readAt, count: unreadPeerMsgs.length },
                 req.user!.id
               );
+              if (conversation.id !== id) {
+                realtimeChatService.broadcast(
+                  id,
+                  'message:read',
+                  { conversationId: conversation.id, readBy: req.user!.id, readAt, count: unreadPeerMsgs.length },
+                  req.user!.id
+                );
+              }
             })
             .catch((e) => console.error('Auto-mark read error:', e));
         }
@@ -459,12 +507,10 @@ export const conversationController = {
         return;
       }
 
-      // Check if conversation exists by direct UUID
-      let conversation = await prisma.conversation.findUnique({
-        where: { id },
-      });
+      // Check if conversation exists by direct UUID or temporary client ID
+      let conversation = await resolveConversationRecord(id, req.user.id, itemId);
 
-      // If not found (e.g. client ID format conv_<itemId>_<timestamp>), resolve or create
+      // If not found, resolve item/seller and auto-create
       if (!conversation) {
         let targetItemId: string | null = itemId || null;
         if (!targetItemId && id.startsWith('conv_')) {
@@ -474,32 +520,21 @@ export const conversationController = {
           }
         }
 
-        if (targetItemId) {
-          conversation = await prisma.conversation.findFirst({
-            where: {
-              itemId: targetItemId,
-              OR: [{ participantAId: req.user.id }, { participantBId: req.user.id }],
-            },
-          });
+        let resolvedSellerId = sellerId;
+        if (!resolvedSellerId && targetItemId) {
+          const item = await prisma.item.findUnique({ where: { id: targetItemId } });
+          if (item) resolvedSellerId = item.sellerId;
         }
 
-        // Auto-create if sellerId is provided or can be found from item
-        if (!conversation && (sellerId || targetItemId)) {
-          let resolvedSellerId = sellerId;
-          if (!resolvedSellerId && targetItemId) {
-            const item = await prisma.item.findUnique({ where: { id: targetItemId } });
-            if (item) resolvedSellerId = item.sellerId;
-          }
-
-          if (resolvedSellerId && resolvedSellerId !== req.user.id) {
-            conversation = await prisma.conversation.create({
-              data: {
-                itemId: targetItemId || null,
-                participantAId: req.user.id,
-                participantBId: resolvedSellerId,
-              },
-            });
-          }
+        if (resolvedSellerId && resolvedSellerId !== req.user.id) {
+          conversation = await prisma.conversation.create({
+            data: {
+              itemId: targetItemId || null,
+              participantAId: req.user.id,
+              participantBId: resolvedSellerId,
+            },
+            select: { id: true, participantAId: true, participantBId: true, itemId: true },
+          });
         }
       }
 
@@ -555,6 +590,14 @@ export const conversationController = {
         formattedMessage,
         req.user.id
       );
+      if (conversation.id !== id) {
+        realtimeChatService.broadcast(
+          id,
+          'message:new',
+          formattedMessage,
+          req.user.id
+        );
+      }
 
       res.status(201).json({
         ...formattedMessage,
@@ -575,13 +618,11 @@ export const conversationController = {
 
       const { id } = req.params;
 
-      const conversation = await prisma.conversation.findUnique({
-        where: { id },
-        select: { id: true, participantAId: true, participantBId: true },
-      });
+      const conversation = await resolveConversationRecord(id, req.user.id);
 
       if (!conversation) {
-        res.status(404).json({ error: 'Conversation not found' });
+        // Idempotent success: draft conversations have 0 unread messages in the database
+        res.status(200).json({ success: true, updatedCount: 0, readAt: new Date().toISOString() });
         return;
       }
 
@@ -590,7 +631,7 @@ export const conversationController = {
       // Find all unread messages sent by peer
       const unreadMessages = await prisma.message.findMany({
         where: {
-          conversationId: id,
+          conversationId: conversation.id,
           senderId: { not: req.user.id },
         },
         select: { id: true, metadata: true },
@@ -616,16 +657,29 @@ export const conversationController = {
 
       // Broadcast read receipt in 0ms (WhatsApp double cyan ticks)
       realtimeChatService.broadcast(
-        id,
+        conversation.id,
         'message:read',
         {
-          conversationId: id,
+          conversationId: conversation.id,
           readBy: req.user.id,
           readAt,
           updatedCount,
         },
         req.user.id
       );
+      if (conversation.id !== id) {
+        realtimeChatService.broadcast(
+          id,
+          'message:read',
+          {
+            conversationId: conversation.id,
+            readBy: req.user.id,
+            readAt,
+            updatedCount,
+          },
+          req.user.id
+        );
+      }
 
       res.json({ success: true, updatedCount, readAt });
     } catch (error) {
@@ -656,6 +710,21 @@ export const conversationController = {
         req.user.id
       );
 
+      const conversation = await resolveConversationRecord(id, req.user.id);
+      if (conversation && conversation.id !== id) {
+        realtimeChatService.broadcast(
+          conversation.id,
+          'typing:status',
+          {
+            conversationId: conversation.id,
+            userId: req.user.id,
+            userName: req.user.name,
+            isTyping: !!isTyping,
+          },
+          req.user.id
+        );
+      }
+
       res.json({ success: true, isTyping: !!isTyping });
     } catch (error) {
       console.error('Set typing error:', error);
@@ -672,10 +741,7 @@ export const conversationController = {
 
       const { id } = req.params;
 
-      const conversation = await prisma.conversation.findUnique({
-        where: { id },
-        select: { id: true, participantAId: true, participantBId: true },
-      });
+      const conversation = await resolveConversationRecord(id, req.user.id);
 
       if (!conversation) {
         res.status(404).json({ error: 'Conversation not found' });
@@ -696,7 +762,10 @@ export const conversationController = {
       });
       res.flushHeaders?.();
 
-      realtimeChatService.addClient(id, req.user.id, res);
+      realtimeChatService.addClient(conversation.id, req.user.id, res);
+      if (conversation.id !== id) {
+        realtimeChatService.addClient(id, req.user.id, res);
+      }
     } catch (error) {
       console.error('Stream conversation error:', error);
       res.status(500).end();
