@@ -87,7 +87,18 @@ export const itemController = {
         },
       });
 
-      const formatted = items.map((i) => ({
+      // Deduplicate items to prevent double-posting artifacts in listings
+      const seenItemKeys = new Set<string>();
+      const uniqueItems = items.filter((i) => {
+        if (seenItemKeys.has(i.id)) return false;
+        const key = `${i.sellerId}_${i.title.toLowerCase().trim()}_${i.price}_${i.transactionType}`;
+        if (seenItemKeys.has(key)) return false;
+        seenItemKeys.add(i.id);
+        seenItemKeys.add(key);
+        return true;
+      });
+
+      const formatted = uniqueItems.map((i) => ({
         id: i.id,
         title: i.title,
         description: i.description,
@@ -255,13 +266,84 @@ export const itemController = {
         return;
       }
 
+      const parsedPrice = parseFloat(price) || 0.0;
+
+      // Idempotency & duplicate check:
+      // If user recently created an identical active listing, return existing to avoid duplicate entries
+      const existingItem = await prisma.item.findFirst({
+        where: {
+          sellerId: user.id,
+          title: { equals: title.trim(), mode: 'insensitive' },
+          price: parsedPrice,
+          transactionType,
+          status: 'ACTIVE',
+        },
+        include: {
+          seller: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              trustRating: true,
+              verificationStatus: true,
+              totalTransactions: true,
+            },
+          },
+          college: { select: { id: true, name: true, code: true } },
+          images: { orderBy: { order: 'asc' } },
+          pickupLocation: true,
+        },
+      });
+
+      if (existingItem) {
+        res.status(200).json({
+          id: existingItem.id,
+          title: existingItem.title,
+          description: existingItem.description,
+          category: existingItem.category,
+          condition: existingItem.condition,
+          price: existingItem.price,
+          type: existingItem.transactionType,
+          transactionType: existingItem.transactionType,
+          resourceType: existingItem.transactionType,
+          sellerId: existingItem.sellerId,
+          ownerId: existingItem.sellerId,
+          studentId: existingItem.sellerId,
+          ownerName: existingItem.seller.name,
+          sellerName: existingItem.seller.name,
+          studentName: existingItem.seller.name,
+          ownerEmail: existingItem.seller.email,
+          studentEmail: existingItem.seller.email,
+          sellerRating: existingItem.seller.trustRating,
+          isVerifiedSeller: existingItem.seller.verificationStatus === 'VERIFIED',
+          collegeId: existingItem.collegeId,
+          collegeName: existingItem.college.name,
+          status: existingItem.status,
+          isAvailable: existingItem.isAvailable,
+          isDigital: existingItem.isDigital,
+          digitalProvider: existingItem.digitalProvider,
+          exchangePreferences: existingItem.exchangePreferences,
+          maxBorrowDays: existingItem.maxBorrowDays,
+          courseCode: existingItem.courseCode,
+          depositAmount: 0,
+          viewCount: 15,
+          timesShared: existingItem.seller.totalTransactions || 0,
+          pickupLocation: existingItem.pickupLocation?.name || existingItem.pickupLocationName || 'Campus Main Hub',
+          pickupLocationId: existingItem.pickupLocationId,
+          imageUrls: existingItem.images.length > 0 ? existingItem.images.map((img) => img.url) : ['https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c'],
+          createdAt: existingItem.createdAt.toISOString(),
+          updatedAt: existingItem.updatedAt ? existingItem.updatedAt.toISOString() : existingItem.createdAt.toISOString(),
+        });
+        return;
+      }
+
       const item = await prisma.item.create({
         data: {
           title,
           description: description || '',
           category,
           condition,
-          price: parseFloat(price) || 0.0,
+          price: parsedPrice,
           transactionType,
           exchangePreferences: exchangePreferences || null,
           maxBorrowDays: maxBorrowDays ? parseInt(maxBorrowDays) : null,
