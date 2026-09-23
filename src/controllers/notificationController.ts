@@ -9,12 +9,15 @@ export const notificationController = {
       const where: any = {};
 
       if (req.user?.role === 'COLLEGE_ADMIN') {
-        where.OR = [{ collegeId: req.user.collegeId }, { targetAudience: 'ALL' }];
+        where.OR = [
+          { targetAudience: 'ALL' },
+          ...(req.user.collegeId ? [{ collegeId: req.user.collegeId }] : []),
+        ];
       } else if (req.user?.role === 'STUDENT') {
         where.OR = [
           { targetAudience: 'ALL' },
-          { collegeId: req.user.collegeId },
-          { userId: req.user.id },
+          ...(req.user.collegeId ? [{ collegeId: req.user.collegeId }] : []),
+          ...(req.user.id ? [{ userId: req.user.id }] : []),
         ];
       }
 
@@ -32,7 +35,7 @@ export const notificationController = {
         collegeId: n.collegeId,
         collegeName: n.college?.name || 'Platform Wide',
         scheduledAt: n.scheduledAt?.toISOString(),
-        sentAt: n.sentAt.toISOString(),
+        sentAt: (n.sentAt ?? n.createdAt).toISOString(),
         status: n.status,
         createdAt: n.createdAt.toISOString(),
       }));
