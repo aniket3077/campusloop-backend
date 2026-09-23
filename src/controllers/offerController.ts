@@ -59,6 +59,17 @@ export const offerController = {
         });
       }
 
+      // Instagram-style: notify the SELLER (receiver) only, never the buyer (sender)
+      prisma.notification.create({
+        data: {
+          title: `New price offer from ${req.user.name || 'Campus Student'}`,
+          message: `Offered ₹${offer.offeredPrice.toFixed(0)} on "${item.title}"`,
+          targetAudience: 'USER',
+          userId: item.sellerId,
+          status: 'SENT',
+        },
+      }).catch((err) => console.error('Failed to create offer notification for seller:', err));
+
       res.status(201).json(offer);
     } catch (error) {
       console.error('Create offer error:', error);
@@ -164,6 +175,18 @@ export const offerController = {
         });
       }
 
+      // Instagram-style: notify the RECEIVER only, never the acceptor (sender)
+      const recipientId = isSeller ? offer.buyerId : offer.sellerId;
+      prisma.notification.create({
+        data: {
+          title: 'Offer Accepted! 🎉',
+          message: `${req.user.name || 'User'} accepted your offer of ₹${finalPrice.toFixed(0)} on "${offer.item.title}"`,
+          targetAudience: 'USER',
+          userId: recipientId,
+          status: 'SENT',
+        },
+      }).catch((err) => console.error('Failed to create accept offer notification:', err));
+
       res.json({
         offer: updatedOffer,
         transaction,
@@ -211,6 +234,18 @@ export const offerController = {
           },
         });
       }
+
+      // Instagram-style: notify the RECEIVER only, never the decliner (sender)
+      const rejectRecipientId = offer.sellerId === req.user.id ? offer.buyerId : offer.sellerId;
+      prisma.notification.create({
+        data: {
+          title: 'Offer Declined',
+          message: `${req.user.name || 'User'} declined your offer of ₹${offer.offeredPrice.toFixed(0)}`,
+          targetAudience: 'USER',
+          userId: rejectRecipientId,
+          status: 'SENT',
+        },
+      }).catch((err) => console.error('Failed to create reject offer notification:', err));
 
       res.json(updated);
     } catch (error) {
@@ -281,6 +316,18 @@ export const offerController = {
           },
         });
       }
+
+      // Instagram-style: notify the RECEIVER only, never the counter-proposer (sender)
+      const counterRecipientId = parentOffer.sellerId === req.user.id ? parentOffer.buyerId : parentOffer.sellerId;
+      prisma.notification.create({
+        data: {
+          title: 'Counteroffer Received 🔄',
+          message: `${req.user.name || 'User'} countered with ₹${newOffer.offeredPrice.toFixed(0)}`,
+          targetAudience: 'USER',
+          userId: counterRecipientId,
+          status: 'SENT',
+        },
+      }).catch((err) => console.error('Failed to create counter offer notification:', err));
 
       res.status(201).json(newOffer);
     } catch (error) {

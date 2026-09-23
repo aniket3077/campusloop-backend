@@ -270,6 +270,18 @@ export const transactionController = {
         },
       });
 
+      // Instagram-style: notify the SELLER (receiver) only, never the buyer (sender)
+      const targetSellerId = sellerId || item.sellerId;
+      prisma.notification.create({
+        data: {
+          title: `New transaction request from ${req.user.name || 'Campus Student'}`,
+          message: `Request for "${item.title}" (${transactionType || item.transactionType})`,
+          targetAudience: 'USER',
+          userId: targetSellerId,
+          status: 'SENT',
+        },
+      }).catch((err) => console.error('Failed to create transaction notification for seller:', err));
+
       res.status(201).json(tx);
     } catch (error) {
       console.error('Create transaction error:', error);
@@ -386,6 +398,29 @@ export const transactionController = {
           entityId: id,
           metadata: { previousStatus: tx.status, newStatus: status, resolutionNote },
         });
+      }
+
+      // Instagram-style: notify the other participant(s), never the person making the update
+      const recipientIds: string[] = [];
+      if (req.user.id === tx.buyerId) {
+        recipientIds.push(tx.sellerId);
+      } else if (req.user.id === tx.sellerId) {
+        recipientIds.push(tx.buyerId);
+      } else {
+        // Admin or external updater: notify both participants
+        recipientIds.push(tx.buyerId, tx.sellerId);
+      }
+
+      for (const uid of recipientIds) {
+        prisma.notification.create({
+          data: {
+            title: `Transaction Update: ${status.replace(/_/g, ' ')}`,
+            message: `Status of "${tx.item.title}" is now ${status.replace(/_/g, ' ')}.`,
+            targetAudience: 'USER',
+            userId: uid,
+            status: 'SENT',
+          },
+        }).catch((err) => console.error('Failed to create status notification:', err));
       }
 
       res.json(updated);

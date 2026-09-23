@@ -599,6 +599,23 @@ export const conversationController = {
         );
       }
 
+      // Instagram-style: notify the RECEIVER only, never the sender
+      const recipientId = conversation.participantAId === req.user.id
+        ? conversation.participantBId
+        : conversation.participantAId;
+
+      if (recipientId && recipientId !== req.user.id) {
+        prisma.notification.create({
+          data: {
+            title: `Message from ${req.user.name || 'Campus Student'}`,
+            message: text.trim().length > 120 ? text.trim().substring(0, 117) + '...' : text.trim(),
+            targetAudience: 'USER',
+            userId: recipientId,
+            status: 'SENT',
+          },
+        }).catch((err) => console.error('Failed to create message notification for recipient:', err));
+      }
+
       res.status(201).json({
         ...formattedMessage,
         isMe: true,

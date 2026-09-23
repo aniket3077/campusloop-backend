@@ -8,17 +8,17 @@ export const notificationController = {
     try {
       const where: any = {};
 
-      if (req.user?.role === 'COLLEGE_ADMIN') {
-        where.OR = [
-          { targetAudience: 'ALL' },
-          ...(req.user.collegeId ? [{ collegeId: req.user.collegeId }] : []),
-        ];
-      } else if (req.user?.role === 'STUDENT') {
-        where.OR = [
-          { targetAudience: 'ALL' },
-          ...(req.user.collegeId ? [{ collegeId: req.user.collegeId }] : []),
-          ...(req.user.id ? [{ userId: req.user.id }] : []),
-        ];
+      if (req.user?.role === 'SUPER_ADMIN') {
+        // SUPER_ADMIN has platform-wide visibility into all announcements
+      } else {
+        const orConditions: any[] = [{ targetAudience: 'ALL' }];
+        if (req.user?.collegeId) {
+          orConditions.push({ collegeId: req.user.collegeId });
+        }
+        if (req.user?.id) {
+          orConditions.push({ userId: req.user.id });
+        }
+        where.OR = orConditions;
       }
 
       const notifications = await prisma.notification.findMany({
